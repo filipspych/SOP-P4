@@ -2,6 +2,7 @@
 Zadanie polega na napisaniu programu przeprowadzającego prostą symulację wyścigów wątków. Program przyjmuje różne komendy, które mogą manipulować stanem wyścigu oraz wyświetlać ten stan.
 
 TODO:
+
 0. utworz struktury (GLOBALNE - najwyzej cie poprawia)
 	- participant
 	- race

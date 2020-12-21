@@ -1,6 +1,6 @@
-all: waztki
-waztki: waztki.c	
-	gcc -Wall -o waztki waztki.c
+all: wyscigi
+wyscigi: wyscigi.c	
+	gcc -Wall -o wyscigi wyscigi.c
 .PHONY: clean all
 clean:
-	rm waztki
+	rm wyscigi

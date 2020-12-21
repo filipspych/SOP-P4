@@ -1,6 +1,9 @@
+CC=gcc
+CFLAGS= -std=gnu99 -Wall -Wextra -Wshadow -g3
+LDLIBS = -lpthread -lm
+
 all: wyscigi
-wyscigi: wyscigi.c	
-	gcc -Wall -o wyscigi wyscigi.c
+wyscigi: wyscigi.c
 .PHONY: clean all
 clean:
 	rm wyscigi

@@ -8,6 +8,7 @@
 #define RAND_3_MIN 0.095
 #define RAND_3_MAX 0.105
 #define DEFAULT_LAPS 1
+#define SLEEP_SECONDS 1
 #define MAX_RACER_NAME_LENGTH 256
 #define RACER_DEFAULT_NAME_LENGTH 7
 #define MAX_FILEPATH_LEN 256
@@ -21,7 +22,7 @@
                      fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), \
                      exit(EXIT_FAILURE))
 #define DEBUG_MODE false
-#define D(msg) if(DEBUG_MODE) fprintf(stderr, "DEBUG %ld t=%ld ln=%ld: %s \n", pthread_self(), time(0), __LINE__, msg)
+#define D(msg) if(DEBUG_MODE) fprintf(stderr, "DEBUG %ld t=%ld ln=%d: %s \n", pthread_self(), time(0), __LINE__, msg)
 #define FILE_INPUT_BUFF_SIZE MAX_RACER_NAME_LENGTH
 #define MAX_INPUT_LENGTH 256
 #define MAX_OUTPUT_LENGTH 2048
@@ -50,7 +51,7 @@ void welcome();
 
 void usage();
 
-void badArgFor(char opt);
+void badArgFor(int opt);
 
 void badArg();
 

@@ -147,7 +147,7 @@ void handleUserCommand(Race *race, bool *reconfigurationNeeded) {
     } else if (0 == strcmp(buf, "add_participant")) {
         if (race->started) printf("%s FAILED: this command is disabled during the race\n", buf);
         else if (race->racerCount + 1 <= MAX_RACER_COUNT) cmdAddParticipant(race);
-        else printf("%s FAILED: too many participants!\n");
+        else printf("%s FAILED: too many participants!\n", buf);
     } else if (0 == strcmp(buf, "results")) {
         if (!race->started) printf("%s FAILED: this command is disabled before the race\n", buf);
         else cmdResults(race);
@@ -294,6 +294,8 @@ void cmdAddParticipant(Race *r) {
 }
 
 void cmdExit(Race *r) {
+    cmdCancel(r);
+    sleep(SLEEP_SECONDS);
     exit(EXIT_SUCCESS);
 }
 
@@ -366,7 +368,7 @@ void setIntQuitHandling() {
         ERR("Couldn't create an aux thread");
 }
 
-void *intQuitHandler(void *args) {
+void *intQuitHandler(void *ignore) {
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIGINT);
@@ -423,7 +425,7 @@ void initRacer(Racer *racer, int ID, Race *race) {
 }
 
 double getRandomDouble(double min, double max, int *seed) {
-    return ((min) + (double) rand_r(seed) / RAND_MAX * (max - min));
+    return ((min) + (double) rand_r((unsigned int *) seed) / RAND_MAX * (max - min));
 }
 
 void giveNames(char *path, int *racerCount, Racer *racers) {
@@ -494,7 +496,7 @@ void readArguments(int argc, char **argv, char *inputFilePath, char *outputFileP
     outputFilePath[0] = '\0';
 
     bool namesInputMethodSet = false;
-    char c;
+    int c;
     while ((c = getopt(argc, argv, "n:p:l:o:f:")) != -1) {
 
         switch (c) {
@@ -531,6 +533,7 @@ void readArguments(int argc, char **argv, char *inputFilePath, char *outputFileP
                 else
                     fprintf(stderr, "Unknown option `-%c'.\n", optopt);
                 usage();
+                break;
             default:
                 ERR("Could not interpret supplied arguments");
         }
@@ -556,7 +559,7 @@ void usage() {
     exit(EXIT_FAILURE);
 }
 
-void badArgFor(char opt) {
+void badArgFor(int opt) {
     fprintf(stderr, "Bad argument for -%c given!\n", opt);
     usage();
 }
@@ -590,7 +593,7 @@ void *racer_t(void *args) {
     double dist = 0;
     long raceStartTimestamp = lastLapTimestamp.tv_sec * 1000 + lastLapTimestamp.tv_nsec / 10000;
     while (true) {
-        sleep(1);
+        sleep(SLEEP_SECONDS);
         if (thisRacer->race->canceled || thisRacer->race->finished) return NULL;
         dist += getRandomDouble(RANDOM_1_MIN, RANDOM_1_MAX, &thisRacer->seed) * thisRacer->v;
         int curCompletedLaps;

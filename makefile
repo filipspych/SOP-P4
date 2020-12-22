@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS= -std=gnu99 -Wall -Wextra -Wshadow -g3
+CFLAGS= -std=gnu99 -Wall -Wextra -Wshadow
 LDLIBS = -lpthread -lm
 
 all: wyscigi

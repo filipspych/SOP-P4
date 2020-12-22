@@ -28,6 +28,7 @@
 #define ERR(source) (perror(source),                                 \
                      fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), \
                      exit(EXIT_FAILURE))
+#define D(msg) (fprintf(stderr, "DEBUG %ld t=%ld ln=%ld: %s \n", pthread_self(), time(0), __LINE__, msg))
 #define FILE_INPUT_BUFF_SIZE MAX_RACER_NAME_LENGTH
 
 #define MAX_INPUT_LENGTH 255
@@ -82,11 +83,11 @@ void initRace(Race *race, Racer *racers, Racer **sortedRacers, char *path);
 
 void setIntQuitHandling();
 
-void printRaceState();
+void printRaceState(Race *r);
 
 void handleUserCommand(Race *race, bool *reconfigurationNeeded);
 
-bool isRaceFinished();
+bool isRaceFinished(Race *r);
 
 void cmdCancel();
 
@@ -140,6 +141,7 @@ struct Racer_s {
     int lastFinishedLap;
     double lastFinishedLapTime;
     bool droppedOut;
+    bool hasUnreportedProgress;
 };
 
 int main(int argc, char **argv) {
@@ -162,8 +164,8 @@ int main(int argc, char **argv) {
             if (reconfigurationNeeded) break;
             if (shouldPrint) {
                 shouldPrint = false;
-                printRaceState();
-                if (isRaceFinished()) return EXIT_SUCCESS;
+                printRaceState(&race);
+                if (isRaceFinished(&race)) return EXIT_SUCCESS;
             }
         }
     }
@@ -189,14 +191,18 @@ void cmdStart(Race *race) {
     }
 }
 
-bool isRaceFinished() {
-//todo
+bool isRaceFinished(Race *r) {
+    for (int i = 0; i < r->racerCount; ++i) {
+        if (!r->racers[i].droppedOut && r->racers[i].lastFinishedLap < r->lapCount)
+            return false;
+    }
+    return true;
 }
 
 void handleUserCommand(Race *race, bool *reconfigurationNeeded) {
     char buf[MAX_INPUT_LENGTH] = {};
-    fgets(buf, MAX_INPUT_LENGTH, stdin);
-    buf[strcspn(buf, "\n")] = 0;
+    scanf("%s\n", buf);
+//    buf[strcspn(buf, "\n")] = 0;
 
     if (0 == strcmp(buf, "info")) {
         cmdInfo(race);
@@ -355,8 +361,22 @@ void cmdCancel() {
     exit(EXIT_SUCCESS); //todo
 }
 
-void printRaceState() {
-
+void printRaceState(Race *r) {
+    pthread_mutex_lock(&r->raceStateMx);
+    sortResults(r);
+    Racer **iter = r->sortedRacers;
+    for (int i = 0; i < r->racerCount; ++i) {
+        if ((*iter)->hasUnreportedProgress) {
+            (*iter)->hasUnreportedProgress = false;
+            printRacer(*iter);
+        }
+        iter++;
+    }
+    pthread_mutex_unlock(&r->raceStateMx);
+    if (isRaceFinished(r)) {
+        printf("RACE FINISHED\n");
+        printResults(r);
+    }
 }
 
 void setIntQuitHandling() {
@@ -405,6 +425,7 @@ void initRacer(Racer *racer, int ID, Race *race) {
     racer->lastFinishedLap = 0;
     racer->lastFinishedLapTime = 0;
     racer->droppedOut = false;
+    racer->hasUnreportedProgress = false;
 }
 
 double getRandomDouble(double min, double max) {
@@ -546,20 +567,30 @@ void badArg() {
     usage();
 }
 
+void onLapCompleted(Racer *thisRacer, int curCompletedLaps) {
+    D("onLapCompleted");
+    pthread_mutex_lock(&thisRacer->race->raceStateMx);
+    D("onLapCompletedAfterMutex");
+    thisRacer->lastFinishedLap = curCompletedLaps;
+    sendSigusr1(thisRacer->race->mainThreadID);
+    thisRacer->hasUnreportedProgress = true;
+    pthread_mutex_unlock(&thisRacer->race->raceStateMx);
+}
+
 void *racer_t(void *args) {
     Racer *thisRacer = args;
 
     double dist = 0;
-    int completedLaps = 0;
     while (true) {
         sleep(1);
         dist += getRandomDouble(0.9, 1.1) * thisRacer->v;
         int curCompletedLaps;
-        if ((curCompletedLaps = dist / thisRacer->race->lapLen) > completedLaps) {
-            completedLaps = curCompletedLaps;
-            sendSigusr1(thisRacer->race->mainThreadID);
-            if (completedLaps >= thisRacer->race->lapCount)
+        if ((curCompletedLaps = dist / thisRacer->race->lapLen) > thisRacer->lastFinishedLap) {
+            onLapCompleted(thisRacer, curCompletedLaps);
+            if (thisRacer->lastFinishedLap >= thisRacer->race->lapCount) {
+                // finished
                 return NULL;
+            }
         }
     }
 }

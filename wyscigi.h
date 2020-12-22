@@ -1,3 +1,4 @@
+#define UNINITIALIZED -1
 #define RANDOM_1_MIN 0.9
 #define RANDOM_1_MAX 1.1
 #define CALLOFF_THRESHOLD 2
@@ -45,7 +46,7 @@ void *racer_t(void *args);
 
 void readArguments(int argc, char **argv, char *inputFilePath, char *outputFilePath, Race *race);
 
-void validateArgs(int threadCount, const char *inputFilePath);
+void validateArgs(int racerCount, const char *inputFilePath);
 
 void welcome();
 

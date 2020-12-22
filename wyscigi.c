@@ -22,25 +22,28 @@ struct Race_s {
     int racerCount, lapCount;
     double lapLen;
     pthread_t mainThreadID;
-    Racer *racers;
-    Racer **sortedRacers;
     volatile bool started;
     pthread_mutex_t raceStateMx;
     volatile bool canceled;
     volatile bool finished;
+    Racer **sortedRacers;
+    Racer *racers;
 };
 
 struct Racer_s {
+    pthread_t tid;
     int racerID;
     char name[MAX_RACER_NAME_LENGTH];
     double v;
-    Race *race;
     int lastFinishedLap;
     long lastFinishedLapTimestamp;
     volatile bool droppedOut;
     volatile bool hasUnreportedProgress;
     int seed;
+    Race *race;
 };
+
+void waitForChildren(Race *r);
 
 int main(int argc, char **argv) {
     setIntQuitHandling();
@@ -98,8 +101,7 @@ void cmdStart(Race *race) {
     race->finished = false;
     setSigusr1Handling();
     for (int i = 0; i < race->racerCount; i++) {
-        pthread_t ignore;
-        int err = pthread_create(&ignore, NULL, racer_t, (void *) &race->racers[i]);
+        int err = pthread_create(&race->racers[i].tid, NULL, racer_t, (void *) &race->racers[i]);
         if (err != 0)
             ERR("Couldn't create a racer thread");
     }
@@ -295,8 +297,8 @@ void cmdAddParticipant(Race *r) {
 }
 
 void cmdExit(Race *r) {
-    cmdCancel(r);
-    sleep(SLEEP_SECONDS);
+    if(r->started)
+        cmdCancel(r);
     exit(EXIT_SUCCESS);
 }
 
@@ -334,7 +336,14 @@ void cmdInfo(Race *r) {
 void cmdCancel(Race *r) {
     r->started = false;
     r->canceled = true;
+    printf("CANCELING...\n");
+    waitForChildren(r);
     printf("RACE CANCELED\n");
+}
+
+void waitForChildren(Race *r) {
+    for (int i = 0; i < r->racerCount; i++)
+        pthread_join(r->racers[i].tid, NULL);
 }
 
 void printRaceState(Race *r) {
@@ -490,9 +499,9 @@ void welcome() {
 }
 
 void readArguments(int argc, char **argv, char *inputFilePath, char *outputFilePath, Race *race) {
-    race->racerCount = -1;
+    race->racerCount = UNINITIALIZED;
     inputFilePath[0] = '\0';
-    race->lapLen = -1;
+    race->lapLen = UNINITIALIZED;
     race->lapCount = DEFAULT_LAPS;
     outputFilePath[0] = '\0';
 
@@ -542,8 +551,8 @@ void readArguments(int argc, char **argv, char *inputFilePath, char *outputFileP
     validateArgs(race->racerCount, inputFilePath);
 }
 
-void validateArgs(int threadCount, const char *inputFilePath) {
-    if ((threadCount == -1 && inputFilePath[0] == '\0') || (threadCount != -1 && inputFilePath[0] != '\0'))
+void validateArgs(int racerCount, const char *inputFilePath) {
+    if ((racerCount == UNINITIALIZED && inputFilePath[0] == '\0') || (racerCount != UNINITIALIZED && inputFilePath[0] != '\0'))
         badArg();
 }
 

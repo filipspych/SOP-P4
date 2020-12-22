@@ -287,6 +287,7 @@ void cmdAddParticipant(Race *r) {
 
     char buf[MAX_INPUT_LENGTH];
     fgets(buf, MAX_INPUT_LENGTH, stdin);
+    buf[strcspn(buf, "\n")] = 0;
 
     Racer *newRacer = &(r->racers[r->racerCount - 1]);
     initRacer(newRacer, r->racerCount - 1, r);

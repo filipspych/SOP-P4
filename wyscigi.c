@@ -40,7 +40,6 @@ struct Racer_s {
     volatile bool droppedOut;
     volatile bool hasUnreportedProgress;
     int seed;
-    pthread_t tid;
 };
 
 int main(int argc, char **argv) {
@@ -65,7 +64,7 @@ int main(int argc, char **argv) {
                 shouldPrint = false;
                 printRaceState(&race);
                 if (isRaceFinished(&race)) {
-                    if(outputPath[0] != '\0') printRaceToFile(&race, outputPath);
+                    if (outputPath[0] != '\0') printRaceToFile(&race, outputPath);
                     resetRace(&race);
                 }
             }
@@ -86,8 +85,8 @@ void resetRace(Race *r) {
     initRacers(r);
 }
 
-void initSortedRacers(struct Racer_s racers[8], struct Racer_s *sortedRacers[8], int count) {
-    for (int i = 0; i < count; ++i) {
+void initSortedRacers(struct Racer_s *racers, struct Racer_s **sortedRacers) {
+    for (int i = 0; i < MAX_RACER_COUNT; ++i) {
         sortedRacers[i] = racers++;
     }
 }
@@ -180,7 +179,7 @@ void cmdDropout(Race *r) {
     for (int i = 0; i < r->racerCount; ++i) {
         if (!r->racers[i].droppedOut) racersLeft++;
     }
-    if (racersLeft < 2) {
+    if (racersLeft < CALLOFF_THRESHOLD) {
         r->finished = true;
         sendSigusr1(r->mainThreadID);
     }
@@ -189,21 +188,21 @@ void cmdDropout(Race *r) {
 void cmdCheat(Race *r) {
     Racer *racer = selectParticipant(r);
 
-    double increase = 5;
+    double increase = CHEAT_RATIO;
     double oldV = racer->v;
     racer->v *= increase;
     printf("SUCCESS: %s's speed increased by %f%% is now %f [m/s] (used to be %f [m/s])\n",
-           racer->name, increase * 100, racer->v, oldV);
+           racer->name, increase * PERCENTAGE, racer->v, oldV);
 }
 
 void cmdFault(Race *r) {
     Racer *racer = selectParticipant(r);
 
-    double decrease = getRandomDouble(0.1, 0.3, &racer->seed);
+    double decrease = getRandomDouble(RANDOM_2_MIN, RANDOM_2_MAX, &racer->seed);
     double oldV = racer->v;
     racer->v *= (1 - decrease);
     printf("SUCCESS: %s's speed decreased by %f%% is now %f [m/s] (used to be %f [m/s])\n",
-           racer->name, decrease * 100, racer->v, oldV);
+           racer->name, decrease * PERCENTAGE, racer->v, oldV);
 }
 
 Racer *selectParticipant(Race *r) {
@@ -246,9 +245,9 @@ void printResults(Race *r, int fd) {
 
     unsigned long toWrite = strlen(buf);
     char *output = buf;
-    while(toWrite > 0) {
+    while (toWrite > 0) {
         int written;
-        if((written = write(fd, output, toWrite)) < 0) ERR("Couldn't write to buf file!");
+        if ((written = write(fd, output, toWrite)) < 0) ERR("Couldn't write to buf file!");
         toWrite -= written;
         output += written;
     }
@@ -273,13 +272,13 @@ void printRacer(Racer *racer, char *buf) {
     buf[0] = '\0';
     char buf2[MAX_OUTPUT_LENGTH] = {};
     sprintf(buf2, "%s\t\tlap: %d time: %ld [ms]",
-           racer->name, racer->lastFinishedLap, racer->lastFinishedLapTimestamp);
+            racer->name, racer->lastFinishedLap, racer->lastFinishedLapTimestamp);
     strcat(buf, buf2);
     if (racer->droppedOut) {
         sprintf(buf2, "\tDROPPED OUT!");
         strcat(buf, buf2);
     }
-    sprintf(buf2,"\n");
+    sprintf(buf2, "\n");
     strcat(buf, buf2);
 }
 
@@ -322,7 +321,7 @@ void cmdInfo(Race *r) {
     printf("----------PARTICIPANTS---------\nThere are %d participants in this race:\n", r->racerCount);
     for (int i = 0; i < r->racerCount; ++i) {
         printf("#%d %s\n\tv = %f [m/s]", r->racers[i].racerID, r->racers[i].name, r->racers[i].v);
-        if(r->racers[i].droppedOut) printf("\tDROPPED OUT!");
+        if (r->racers[i].droppedOut) printf("\tDROPPED OUT!");
         printf("\n");
     }
     printf("-------------------------------\n\n");
@@ -403,7 +402,7 @@ void initRace(Race *race, Racer *racers, Racer **sortedRacers, char *path) {
 
     giveNames(path, &race->racerCount, racers);
     initRacers(race);
-    initSortedRacers(racers, sortedRacers, race->racerCount);
+    initSortedRacers(racers, sortedRacers);
 }
 
 void initRacers(Race *race) {
@@ -413,11 +412,10 @@ void initRacers(Race *race) {
 }
 
 void initRacer(Racer *racer, int ID, Race *race) {
-    racer->tid;
     racer->seed = rand();
     racer->race = race;
     racer->racerID = ID;
-    racer->v = getRandomDouble(0.095, 0.105, &racer->seed) * race->lapLen;
+    racer->v = getRandomDouble(RAND_3_MIN, RAND_3_MAX, &racer->seed) * race->lapLen;
     racer->lastFinishedLap = 0;
     racer->lastFinishedLapTimestamp = 0;
     racer->droppedOut = false;
@@ -460,7 +458,7 @@ void generateNames(int racerCount, Racer racers[MAX_RACER_COUNT]) {
 }
 
 void readNamesFromFile(int fd, int *racerCount, Racer racers[MAX_RACER_COUNT]) {
-    char buf[FILE_INPUT_BUFF_SIZE+1];
+    char buf[FILE_INPUT_BUFF_SIZE + 1];
     *racerCount = 0;
     int r;
     while ((r = read(fd, buf, MAX_INPUT_LENGTH)) > 0) {
@@ -470,7 +468,7 @@ void readNamesFromFile(int fd, int *racerCount, Racer racers[MAX_RACER_COUNT]) {
                 racers[*racerCount].name[j++] = buf[i];
             } else {
                 racers[*racerCount].name[j] = '\0';
-                if(strlen(racers[*racerCount].name) > 0)
+                if (strlen(racers[*racerCount].name) > 0)
                     (*racerCount)++;
                 j = 0;
             }
@@ -494,7 +492,6 @@ void readArguments(int argc, char **argv, char *inputFilePath, char *outputFileP
     race->lapLen = -1;
     race->lapCount = DEFAULT_LAPS;
     outputFilePath[0] = '\0';
-    //    opterr = 0;
 
     bool namesInputMethodSet = false;
     char c;
@@ -595,7 +592,7 @@ void *racer_t(void *args) {
     while (true) {
         sleep(1);
         if (thisRacer->race->canceled || thisRacer->race->finished) return NULL;
-        dist += getRandomDouble(0.9, 1.1, &thisRacer->seed) * thisRacer->v;
+        dist += getRandomDouble(RANDOM_1_MIN, RANDOM_1_MAX, &thisRacer->seed) * thisRacer->v;
         int curCompletedLaps;
         if ((curCompletedLaps = dist / thisRacer->race->lapLen) > thisRacer->lastFinishedLap) {
             onLapCompleted(thisRacer, curCompletedLaps, raceStartTimestamp);
@@ -611,7 +608,7 @@ void sendSigusr1(pthread_t target) {
     pthread_kill(target, SIGUSR1);
 }
 
-void sigusr1Handler(int sig) {
+void sigusr1Handler(int ignore) {
     shouldPrint = true;
 }
 

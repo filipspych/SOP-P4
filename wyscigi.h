@@ -1,4 +1,12 @@
-
+#define RANDOM_1_MIN 0.9
+#define RANDOM_1_MAX 1.1
+#define CALLOFF_THRESHOLD 2
+#define CHEAT_RATIO 5
+#define PERCENTAGE 100
+#define RANDOM_2_MIN 0.1
+#define RANDOM_2_MAX 0.3
+#define RAND_3_MIN 0.095
+#define RAND_3_MAX 0.105
 #define DEFAULT_LAPS 1
 #define MAX_RACER_NAME_LENGTH 256
 #define RACER_DEFAULT_NAME_LENGTH 7
@@ -76,7 +84,7 @@ void cmdCancel(Race *r);
 
 void cmdInfo(Race *r);
 
-void initSortedRacers(struct Racer_s *racers, struct Racer_s **sortedRacers, int count);
+void initSortedRacers(struct Racer_s *racers, struct Racer_s **sortedRacers);
 
 void cmdChangeLaps(Race *r);
 
@@ -90,7 +98,7 @@ void initRacer(Racer *racer, int ID, Race *race);
 
 void cmdResults(Race *r);
 
-void printResults(Race *r, int fd) ;
+void printResults(Race *r, int fd);
 
 void printRacer(Racer *racer, char *buf);
 

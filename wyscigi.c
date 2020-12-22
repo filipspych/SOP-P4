@@ -1,6 +1,6 @@
 /*
 * Oświadczam, że niniejsza praca stanowiąca podstawę 
-* do uznania osiągnięcia efektów uczenia się z przedmiotu 
+* do uznania osiągnięcia efektów uczenia się z przedmiotu
 * SOP została wykonana przezemnie samodzielnie.
 * Filip Spychala 305797
 */
@@ -14,115 +14,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include "wyscigi.h"
 
-#define DEFAULT_LAPS 1
-#define MAX_RACER_NAME_LENGTH 255
-#define RACER_DEFAULT_NAME_LENGTH 7
-#define MAX_FILEPATH_LEN 255
-#define MIN_RACER_COUNT 2
-#define MAX_RACER_COUNT 8
-#define MIN_LAP_LEN 100
-#define MAX_LAP_LEN 5000
-#define MIN_LAP_COUNT 1
-#define MAX_LAP_COUNT 5
-#define ERR(source) (perror(source),                                 \
-                     fprintf(stderr, "%s:%d\n", __FILE__, __LINE__), \
-                     exit(EXIT_FAILURE))
-#define DEBUG_MODE false
-#define D(msg) if(DEBUG_MODE) fprintf(stderr, "DEBUG %ld t=%ld ln=%ld: %s \n", pthread_self(), time(0), __LINE__, msg)
-#define FILE_INPUT_BUFF_SIZE MAX_RACER_NAME_LENGTH
-
-#define MAX_INPUT_LENGTH 255
 volatile sig_atomic_t shouldPrint = false;
-
-
-struct Racer_s;
-typedef struct Racer_s Racer;
-
-struct Race_s;
-typedef struct Race_s Race;
-
-void *intQuitHandler(void *args);
-
-void sigusr1Handler(int sig);
-
-void cmdStart(Race *race);
-
-void setHandler(void (*f)(int), int sigNo);
-
-void *racer_t(void *args);
-
-void readArguments(int argc, char **argv, char *inputFilePath, char *outputFilePath, Race *race);
-
-void validateArgs(int threadCount, const char *inputFilePath);
-
-void welcome();
-
-void usage();
-
-void badArgFor(char opt);
-
-void badArg();
-
-void giveNames(char *path, int racerCount, Racer *racers);
-
-bool isUserInput();
-
-void readNamesFromFile(int fd, int racerCount, Racer *racers);
-
-void generateNames(int racerCount, Racer *racers);
-
-double getRandomDouble(double min, double max);
-
-void initRacers(Race *race);
-
-void sendSigusr1(pthread_t target);
-
-void setSigusr1Handling();
-
-void initRace(Race *race, Racer *racers, Racer **sortedRacers, char *path);
-
-void setIntQuitHandling();
-
-void printRaceState(Race *r);
-
-void handleUserCommand(Race *race, bool *reconfigurationNeeded);
-
-bool isRaceFinished(Race *r);
-
-void cmdCancel();
-
-void cmdInfo(Race *r);
-
-void initSortedRacers(struct Racer_s *racers, struct Racer_s **sortedRacers, int count);
-
-void cmdChangeLaps(Race *r);
-
-void cmdChangeLength(Race *r);
-
-void cmdExit(Race *r);
-
-void cmdAddParticipant(Race *r);
-
-void initRacer(Racer *racer, int ID, Race *race);
-
-void cmdResults(Race *r);
-
-void printResults(Race *r);
-
-void printRacer(Racer *racer);
-
-void cmdFault(Race *r);
-
-void sortResults(Race *r);
-
-Racer *getRacer(char *name, Race *r);
-
-void cmdCheat(Race *r);
-
-Racer *chooseParticipant(Race *r);
-
-void cmdDropout(Race *r);
 
 struct Race_s {
     int racerCount, lapCount;
@@ -130,8 +24,10 @@ struct Race_s {
     pthread_t mainThreadID;
     Racer *racers;
     Racer **sortedRacers;
-    bool started;
+    volatile bool started;
     pthread_mutex_t raceStateMx;
+    volatile bool canceled;
+    volatile bool finished;
 };
 
 struct Racer_s {
@@ -141,8 +37,10 @@ struct Racer_s {
     Race *race;
     int lastFinishedLap;
     long lastFinishedLapTimestamp;
-    bool droppedOut;
-    bool hasUnreportedProgress;
+    volatile bool droppedOut;
+    volatile bool hasUnreportedProgress;
+    int seed;
+    pthread_t tid;
 };
 
 int main(int argc, char **argv) {
@@ -166,12 +64,26 @@ int main(int argc, char **argv) {
             if (shouldPrint) {
                 shouldPrint = false;
                 printRaceState(&race);
-                if (isRaceFinished(&race)) return EXIT_SUCCESS;
+                if (isRaceFinished(&race)) {
+                    if(outputPath[0] != '\0') printRaceToFile(&race, outputPath);
+                    resetRace(&race);
+                }
             }
         }
     }
 
 
+}
+
+void printRaceToFile(Race *r, char *path) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
+    printResults(r, fd);
+}
+
+void resetRace(Race *r) {
+    r->started = false;
+    r->canceled = false;
+    initRacers(r);
 }
 
 void initSortedRacers(struct Racer_s racers[8], struct Racer_s *sortedRacers[8], int count) {
@@ -183,6 +95,8 @@ void initSortedRacers(struct Racer_s racers[8], struct Racer_s *sortedRacers[8],
 void cmdStart(Race *race) {
     // starting all racers' threads
     race->started = true;
+    race->canceled = false;
+    race->finished = false;
     setSigusr1Handling();
     for (int i = 0; i < race->racerCount; i++) {
         pthread_t ignore;
@@ -194,9 +108,15 @@ void cmdStart(Race *race) {
 }
 
 bool isRaceFinished(Race *r) {
+    if (r->finished) return true;
+
+    bool oneRacer = false;
     for (int i = 0; i < r->racerCount; ++i) {
-        if (!r->racers[i].droppedOut && r->racers[i].lastFinishedLap < r->lapCount)
-            return false;
+        if (!r->racers[i].droppedOut && r->racers[i].lastFinishedLap < r->lapCount) {
+            if (oneRacer) {
+                return false;
+            } else oneRacer = true;
+        }
     }
     return true;
 }
@@ -234,7 +154,10 @@ void handleUserCommand(Race *race, bool *reconfigurationNeeded) {
         else cmdResults(race);
     } else if (0 == strcmp(buf, "cancel")) {
         if (!race->started) printf("%s FAILED: this command is disabled before the race\n", buf);
-        else cmdCancel(race);
+        else {
+            *reconfigurationNeeded = true;
+            cmdCancel(race);
+        }
     } else if (0 == strcmp(buf, "fault")) {
         if (!race->started) printf("%s FAILED: this command is disabled before the race\n", buf);
         else cmdFault(race);
@@ -252,12 +175,19 @@ void handleUserCommand(Race *race, bool *reconfigurationNeeded) {
 }
 
 void cmdDropout(Race *r) {
-    Racer *racer = chooseParticipant(r);
-
+    selectParticipant(r)->droppedOut = true;
+    int racersLeft = 0;
+    for (int i = 0; i < r->racerCount; ++i) {
+        if (!r->racers[i].droppedOut) racersLeft++;
+    }
+    if (racersLeft < 2) {
+        r->finished = true;
+        sendSigusr1(r->mainThreadID);
+    }
 }
 
 void cmdCheat(Race *r) {
-    Racer *racer = chooseParticipant(r);
+    Racer *racer = selectParticipant(r);
 
     double increase = 5;
     double oldV = racer->v;
@@ -267,16 +197,17 @@ void cmdCheat(Race *r) {
 }
 
 void cmdFault(Race *r) {
-    Racer *racer = chooseParticipant(r);
+    Racer *racer = selectParticipant(r);
 
-    double decrease = getRandomDouble(0.1, 0.3);
+    double decrease = getRandomDouble(0.1, 0.3, &racer->seed);
     double oldV = racer->v;
     racer->v *= (1 - decrease);
     printf("SUCCESS: %s's speed decreased by %f%% is now %f [m/s] (used to be %f [m/s])\n",
            racer->name, decrease * 100, racer->v, oldV);
 }
 
-Racer *chooseParticipant(Race *r) {
+Racer *selectParticipant(Race *r) {
+    printf("Enter participant: ");
     char buf[MAX_INPUT_LENGTH];
     while (NULL == fgets(buf, MAX_INPUT_LENGTH, stdin));
     buf[strcspn(buf, "\n")] = 0;
@@ -295,29 +226,61 @@ Racer *getRacer(char *name, Race *r) {
 }
 
 void cmdResults(Race *r) {
-    printResults(r);
+    printResults(r, STDOUT_FILENO);
 }
 
-void printResults(Race *r) {
+void printResults(Race *r, int fd) {
+    char buf[MAX_OUTPUT_LENGTH] = {};
+    char buf2[MAX_OUTPUT_LENGTH] = {};
+    strcat(buf, "\n----------SCOREBOARD---------\n");
+
     pthread_mutex_lock(&r->raceStateMx);
     sortResults(r);
-    printf("\n----------SCOREBOARD---------\n");
     for (int i = 0; i < r->racerCount; ++i) {
-        printf("%d. ", i);
-        printRacer(r->sortedRacers[i]);
+        sprintf(buf2, "%d. ", i + 1);
+        strcat(buf, buf2);
+        printRacer(r->sortedRacers[i], buf2);
+        strcat(buf, buf2);
     }
-    printf("-----------------------------\n\n");
+    strcat(buf, "-----------------------------\n\n");
+
+    unsigned long toWrite = strlen(buf);
+    char *output = buf;
+    while(toWrite > 0) {
+        int written;
+        if((written = write(fd, output, toWrite)) < 0) ERR("Couldn't write to buf file!");
+        toWrite -= written;
+        output += written;
+    }
     pthread_mutex_unlock(&r->raceStateMx);
 }
 
-void sortResults(Race *r) {
-//todo
+int comp(const void *elem1, const void *elem2) {
+    Racer *f = *((Racer **) elem1);
+    Racer *s = *((Racer **) elem2);
+    if (f->lastFinishedLap > s->lastFinishedLap) return -1;
+    if (f->lastFinishedLap < s->lastFinishedLap) return 1;
+    if (f->lastFinishedLapTimestamp > s->lastFinishedLapTimestamp) return 1;
+    if (f->lastFinishedLapTimestamp < s->lastFinishedLapTimestamp) return -1;
+    return 0;
 }
 
-void printRacer(Racer *racer) {
-    if (racer->droppedOut) printf("DROPPED OUT");
-    printf("%s\t\tlap: %d time: %ld [ms]\n",
+void sortResults(Race *r) {
+    qsort(r->sortedRacers, r->racerCount, sizeof(Racer **), comp);
+}
+
+void printRacer(Racer *racer, char *buf) {
+    buf[0] = '\0';
+    char buf2[MAX_OUTPUT_LENGTH] = {};
+    sprintf(buf2, "%s\t\tlap: %d time: %ld [ms]",
            racer->name, racer->lastFinishedLap, racer->lastFinishedLapTimestamp);
+    strcat(buf, buf2);
+    if (racer->droppedOut) {
+        sprintf(buf2, "\tDROPPED OUT!");
+        strcat(buf, buf2);
+    }
+    sprintf(buf2,"\n");
+    strcat(buf, buf2);
 }
 
 void cmdAddParticipant(Race *r) {
@@ -332,7 +295,7 @@ void cmdAddParticipant(Race *r) {
 }
 
 void cmdExit(Race *r) {
-    exit(EXIT_SUCCESS); //todo
+    exit(EXIT_SUCCESS);
 }
 
 void cmdChangeLength(Race *r) {
@@ -358,13 +321,18 @@ void cmdInfo(Race *r) {
            r->racers[0].race->lapLen);
     printf("----------PARTICIPANTS---------\nThere are %d participants in this race:\n", r->racerCount);
     for (int i = 0; i < r->racerCount; ++i) {
-        printf("#%d %s\n\tv = %f [m/s]\n", r->racers[i].racerID, r->racers[i].name, r->racers[i].v);
+        printf("#%d %s\n\tv = %f [m/s]", r->racers[i].racerID, r->racers[i].name, r->racers[i].v);
+        if(r->racers[i].droppedOut) printf("\tDROPPED OUT!");
+        printf("\n");
     }
+    printf("-------------------------------\n\n");
 
 }
 
-void cmdCancel() {
-    exit(EXIT_SUCCESS); //todo
+void cmdCancel(Race *r) {
+    r->started = false;
+    r->canceled = true;
+    printf("RACE CANCELED\n");
 }
 
 void printRaceState(Race *r) {
@@ -374,13 +342,15 @@ void printRaceState(Race *r) {
     for (int i = 0; i < r->racerCount; ++i) {
         if ((*iter)->hasUnreportedProgress) {
             (*iter)->hasUnreportedProgress = false;
-            printRacer(*iter);
+            char buf[MAX_OUTPUT_LENGTH];
+            printRacer(*iter, buf);
+            printf("%s", buf);
         }
         iter++;
     }
     pthread_mutex_unlock(&r->raceStateMx);
     if (isRaceFinished(r)) {
-        printResults(r);
+        printResults(r, STDOUT_FILENO);
     }
 }
 
@@ -389,7 +359,7 @@ void setIntQuitHandling() {
     sigemptyset(&set);
     sigaddset(&set, SIGINT);
     sigaddset(&set, SIGQUIT);
-    pthread_sigmask(SIG_BLOCK, &set, NULL);
+    if (pthread_sigmask(SIG_BLOCK, &set, NULL)) ERR("Cannot block SIGINT, SIGQUIT");
 
     pthread_t ignore;
     int err = pthread_create(&ignore, NULL, intQuitHandler, NULL);
@@ -398,7 +368,26 @@ void setIntQuitHandling() {
 }
 
 void *intQuitHandler(void *args) {
-    //todo
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGINT);
+    sigaddset(&set, SIGQUIT);
+    int sig;
+    while (true) {
+        if (0 == sigwait(&set, &sig)) {
+            if (askUser("\nAre you sure you want to exit?")) exit(EXIT_SUCCESS);
+        }
+    }
+}
+
+bool askUser(char *question) {
+    char buf[MAX_INPUT_LENGTH] = {};
+    do {
+        printf("%s [y/n]: ", question);
+        while (NULL == fgets(buf, MAX_INPUT_LENGTH, stdin));
+        buf[strcspn(buf, "\n")] = 0;
+    } while ('y' != buf[0] && 'n' != buf[0]);
+    return 'y' == buf[0];
 }
 
 void setSigusr1Handling() {
@@ -412,9 +401,9 @@ void initRace(Race *race, Racer *racers, Racer **sortedRacers, char *path) {
     race->sortedRacers = sortedRacers;
     race->raceStateMx = (pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER;
 
+    giveNames(path, &race->racerCount, racers);
     initRacers(race);
     initSortedRacers(racers, sortedRacers, race->racerCount);
-    giveNames(path, race->racerCount, racers);
 }
 
 void initRacers(Race *race) {
@@ -424,31 +413,42 @@ void initRacers(Race *race) {
 }
 
 void initRacer(Racer *racer, int ID, Race *race) {
+    racer->tid;
+    racer->seed = rand();
     racer->race = race;
     racer->racerID = ID;
-    racer->v = getRandomDouble(0.095, 0.105) * race->lapLen;
+    racer->v = getRandomDouble(0.095, 0.105, &racer->seed) * race->lapLen;
     racer->lastFinishedLap = 0;
     racer->lastFinishedLapTimestamp = 0;
     racer->droppedOut = false;
     racer->hasUnreportedProgress = false;
 }
 
-double getRandomDouble(double min, double max) {
-    return ((min) + (double) rand() / RAND_MAX * (max - min));
+double getRandomDouble(double min, double max, int *seed) {
+    return ((min) + (double) rand_r(seed) / RAND_MAX * (max - min));
 }
 
-void giveNames(char *path, int racerCount, Racer *racers) {
-    int fd;
+void giveNames(char *path, int *racerCount, Racer *racers) {
     if (path[0] != '\0') {
+        int fd;
         if ((fd = open(path, O_RDONLY)) == -1)
             ERR("open");
+        readNamesFromFile(fd, racerCount, racers);
     } else if (isUserInput()) {
-        fd = STDIN_FILENO;
+        readNamesFromStdin(*racerCount, racers);
     } else {
-        generateNames(racerCount, racers);
+        generateNames(*racerCount, racers);
         return;
     }
-    readNamesFromFile(fd, racerCount, racers);
+}
+
+void readNamesFromStdin(int count, Racer *racers) {
+    char buf[FILE_INPUT_BUFF_SIZE];
+    for (int i = 0; i < count; i++) {
+        fgets(buf, FILE_INPUT_BUFF_SIZE, stdin);
+        buf[strcspn(buf, "\n")] = 0;
+        strcpy(racers[i].name, buf);
+    }
 }
 
 void generateNames(int racerCount, Racer racers[MAX_RACER_COUNT]) {
@@ -459,30 +459,28 @@ void generateNames(int racerCount, Racer racers[MAX_RACER_COUNT]) {
     }
 }
 
-void readNamesFromFile(int fd, int racerCount, Racer racers[MAX_RACER_COUNT]) {
-    char *buf;
-    if ((buf = (char *) malloc(sizeof(char) * FILE_INPUT_BUFF_SIZE)) == NULL)
-        ERR("Memory allocation error");
-
-    for (int i = 0; i < racerCount; i++) {
-        char tmp[MAX_RACER_NAME_LENGTH];
-        FILE *file = fdopen(fd, "r"); //todo delete this
-        fscanf(file, "%s\n", tmp);    // todo change this
-        // TODO: low level IO
-        //        while(read(fd, buf, FILE_INPUT_BUFF_SIZE)) {
-        //
-        //        }
-        strcpy(racers[i].name, tmp);
+void readNamesFromFile(int fd, int *racerCount, Racer racers[MAX_RACER_COUNT]) {
+    char buf[FILE_INPUT_BUFF_SIZE+1];
+    *racerCount = 0;
+    int r;
+    while ((r = read(fd, buf, MAX_INPUT_LENGTH)) > 0) {
+        int j = 0;
+        for (int i = 0; i < r; ++i) {
+            if (buf[i] != '\n') {
+                racers[*racerCount].name[j++] = buf[i];
+            } else {
+                racers[*racerCount].name[j] = '\0';
+                if(strlen(racers[*racerCount].name) > 0)
+                    (*racerCount)++;
+                j = 0;
+            }
+        }
     }
+    if (r < 0) ERR("Couldn't read names file");
 }
 
 bool isUserInput() {
-    char buf[MAX_INPUT_LENGTH] = {};
-    do {
-        printf("Do you want to name your racers? [y/n]: ");
-        while (NULL == fgets(buf, MAX_INPUT_LENGTH, stdin));
-    } while ('y' != buf[0] && 'n' != buf[0]);
-    return 'y' == buf[0];
+    return askUser("Do you want to name your racers?");
 }
 
 void welcome() {
@@ -515,7 +513,6 @@ void readArguments(int argc, char **argv, char *inputFilePath, char *outputFileP
                 if (namesInputMethodSet)
                     badArg();
                 strcpy(inputFilePath, optarg);
-                //                if(strlen(inputFilePath) == 0) //todo possible?
                 namesInputMethodSet = true;
                 break;
             case 'l':
@@ -597,7 +594,8 @@ void *racer_t(void *args) {
     long raceStartTimestamp = lastLapTimestamp.tv_sec * 1000 + lastLapTimestamp.tv_nsec / 10000;
     while (true) {
         sleep(1);
-        dist += getRandomDouble(0.9, 1.1) * thisRacer->v;
+        if (thisRacer->race->canceled || thisRacer->race->finished) return NULL;
+        dist += getRandomDouble(0.9, 1.1, &thisRacer->seed) * thisRacer->v;
         int curCompletedLaps;
         if ((curCompletedLaps = dist / thisRacer->race->lapLen) > thisRacer->lastFinishedLap) {
             onLapCompleted(thisRacer, curCompletedLaps, raceStartTimestamp);
